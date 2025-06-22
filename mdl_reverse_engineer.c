@@ -87,7 +87,7 @@ void SaveFile (char *filename, void *buffer, int count)
 }
 
 // --- Byte Order Conversion Functions ---
-// MDL files are Little-Endian. LBM files are Big-Endian.
+// MDL files are Little-Endian. LBM and .tri files are Big-Endian.
 // These functions convert from the file's endianness to the host's endianness
 // when reading, and from host to target endianness when writing.
 // Assuming host system is Little-Endian (e.g., x86 processors).
@@ -136,14 +136,19 @@ void WriteBigLongToBuffer(byte* buffer, unsigned int val) {
     buffer[3] = (byte)(val & 0xFF);
 }
 
-// WriteLittleLong: Writes a 4-byte integer to a file in Little-Endian format.
-void WriteLittleLong(FILE* f, int val) {
-    unsigned char b[4];
-    b[0] = (unsigned char)(val & 0xFF);
-    b[1] = (unsigned char)((val >> 8) & 0xFF);
-    b[2] = (unsigned char)((val >> 16) & 0xFF);
-    b[3] = (unsigned char)((val >> 24) & 0xFF);
-    SafeWrite(f, b, 4);
+// WriteBigFloat: Writes a 4-byte float to a file in Big-Endian format.
+void WriteBigFloat(FILE* f, float val) {
+    union { unsigned char b[4]; float f; } in;
+    in.f = val;
+    
+    // Swap bytes for Big-Endian
+    unsigned char b_swapped[4];
+    b_swapped[0] = in.b[3];
+    b_swapped[1] = in.b[2];
+    b_swapped[2] = in.b[1];
+    b_swapped[3] = in.b[0];
+
+    SafeWrite(f, b_swapped, 4);
 }
 
 
@@ -375,36 +380,65 @@ void WriteLBMfile (char *filename, byte *data, int width, int height, byte *pale
 }
 
 
-// WriteTriFile: Writes a .tri file to disk.
-// The .tri format is typically: 4-byte integer (number of triangles)
-// followed by triangle data (each triangle: 3 vertices, each vertex: 3 floats (X,Y,Z)).
+// WriteTriFile: Writes a .tri file in the Alias format compatible with modelgen.
 void WriteTriFile(char *filename, triangle_t *triangles, int num_triangles) {
     FILE *f = SafeOpenWrite(filename);
 
-    // Write Magic Number for .tri file (Little-Endian)
-    // The MAGIC number in trilib.c is 123322. It is stored as a BigLong in the original.
-    // So, when writing from a little-endian system, we need to convert 123322 to its
-    // big-endian representation before writing it.
+    // 1. Write the Magic Number (Big-Endian)
     unsigned char magic_bytes[4];
-    WriteBigLongToBuffer(magic_bytes, IDTRIHEADER); // Use WriteBigLongToBuffer for big-endian magic number
+    WriteBigLongToBuffer(magic_bytes, IDTRIHEADER);
     SafeWrite(f, magic_bytes, 4);
 
-    // Write number of triangles (Little-Endian)
-    WriteLittleLong(f, num_triangles);
+    // 2. Write the FLOAT_START marker (Big-Endian float)
+    WriteBigFloat(f, 99999.0f);
 
-    // Write triangle vertex data
+    // 3. Write a dummy object name (null-terminated string)
+    char obj_name[] = "exported_object";
+    SafeWrite(f, obj_name, sizeof(obj_name));
+
+    // 4. Write the number of triangles (Big-Endian integer)
+    unsigned char count_bytes[4];
+    WriteBigLongToBuffer(count_bytes, num_triangles);
+    SafeWrite(f, count_bytes, 4);
+
+    // 5. Write a dummy texture name (null-terminated string)
+    char tex_name[] = "default_skin";
+    SafeWrite(f, tex_name, sizeof(tex_name));
+    
+    // 6. Write the triangle data in the full tf_triangle format.
+    // The on-disk structure (aliaspoint_t) includes normals, colors, and UVs,
+    // which we can zero out as we only have the vertex positions.
     for (int i = 0; i < num_triangles; i++) {
         for (int j = 0; j < 3; j++) { // Loop through 3 vertices per triangle
-            for (int k = 0; k < 3; k++) { // Loop through X, Y, Z coordinates
-                // Write each float in little-endian format
-                union { unsigned char b[4]; float f; } val;
-                val.f = triangles[i].verts[j][k];
-                SafeWrite(f, val.b, 4); // Direct write of bytes for float
-            }
+            // For each vertex, write the full "aliaspoint_t" structure.
+            // All values must be Big-Endian floats.
+
+            // vector n (normal) - 3 floats
+            WriteBigFloat(f, 0.0f); WriteBigFloat(f, 0.0f); WriteBigFloat(f, 0.0f);
+            
+            // vector p (point) - 3 floats
+            WriteBigFloat(f, triangles[i].verts[j][0]);
+            WriteBigFloat(f, triangles[i].verts[j][1]);
+            WriteBigFloat(f, triangles[i].verts[j][2]);
+
+            // vector c (color) - 3 floats
+            WriteBigFloat(f, 0.0f); WriteBigFloat(f, 0.0f); WriteBigFloat(f, 0.0f);
+
+            // float u, v (texture coordinates) - 2 floats
+            WriteBigFloat(f, 0.0f);
+            WriteBigFloat(f, 0.0f);
         }
     }
+
+    // 7. Write the FLOAT_END marker (Big-Endian float)
+    WriteBigFloat(f, -99999.0f);
+    
+    // 8. Write the dummy object name again, as expected by the trilib reader.
+    SafeWrite(f, obj_name, sizeof(obj_name));
+    
     fclose(f);
 }
+
 
 // --- Main Program Logic ---
 int main (int argc, char **argv)

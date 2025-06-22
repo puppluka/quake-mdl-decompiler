@@ -14,7 +14,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -std=c99 -g -O2 -D_DEFAULT_SOURCE
 
 # Define the name of the executable
-TARGET = mdl2tri
+TARGET = mdl2tri.exe
 
 # Define the source file
 SOURCE = mdl_reverse_engineer.c
